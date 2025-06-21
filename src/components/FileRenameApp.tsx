@@ -26,6 +26,21 @@ interface DifyConfig {
   userId: string;
 }
 
+// Dify API レスポンス型
+interface DifyApiResponse {
+  success: boolean;
+  filename: string;
+  renamed_filename: string;
+  company: string;
+  date: string;
+  amount: number;
+  description: string;
+  workflow_run_id?: string;
+  elapsed_time?: number;
+  total_tokens?: number;
+  error?: string;
+}
+
 const FileRenameApp = () => {
   const [files, setFiles] = useState<ProcessedFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -86,8 +101,8 @@ const FileRenameApp = () => {
     setFiles([]);
   };
 
-  // Dify API処理
-  const processFileWithDify = async (file: File): Promise<any> => {
+  // Dify API処理 - 型を明確に指定
+  const processFileWithDify = async (file: File): Promise<DifyApiResponse> => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('userId', config.userId);
@@ -102,7 +117,7 @@ const FileRenameApp = () => {
       throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
     }
 
-    return await response.json();
+    return await response.json() as DifyApiResponse;
   };
 
   // 一括処理開始
