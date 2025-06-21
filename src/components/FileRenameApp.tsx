@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from 'react';
-import { Upload, File, X, Download, AlertCircle, CheckCircle, Clock, Loader2 } from 'lucide-react';
+import { Upload, File, X, Download, AlertCircle, CheckCircle, Clock, Loader2, Bug, Terminal } from 'lucide-react';
 
 // 型定義
 interface ProcessedFile {
@@ -26,7 +26,6 @@ interface DifyConfig {
   userId: string;
 }
 
-// Dify API レスポンス型
 interface DifyApiResponse {
   success: boolean;
   filename: string;
@@ -41,6 +40,13 @@ interface DifyApiResponse {
   error?: string;
 }
 
+interface DebugLog {
+  timestamp: string;
+  level: 'info' | 'error' | 'warning';
+  message: string;
+  data?: unknown;
+}
+
 const FileRenameApp = () => {
   const [files, setFiles] = useState<ProcessedFile[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -51,7 +57,27 @@ const FileRenameApp = () => {
     userId: 'user-12345'
   });
   const [showConfig, setShowConfig] = useState(false);
+  const [showDebug, setShowDebug] = useState(true); // デフォルトで表示
+  const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // デバッグログ追加関数
+  const addDebugLog = (level: 'info' | 'error' | 'warning', message: string, data?: unknown) => {
+    const log: DebugLog = {
+      timestamp: new Date().toLocaleTimeString(),
+      level,
+      message,
+      data
+    };
+    setDebugLogs(prev => [...prev, log].slice(-50)); // 最新50件のみ保持
+    
+    // コンソールにも出力
+    const consoleMethod = level === 'error' ? console.error : level === 'warning' ? console.warn : console.log;
+    consoleMethod(`[${log.timestamp}] ${message}`, data || '');
+  };
+
+  // デバッグログクリア
+  const clearDebugLogs = () => setDebugLogs([]);
 
   // ファイルドラッグ&ドロップ処理
   const handleDragOver = (e: React.DragEvent) => {
@@ -68,19 +94,39 @@ const FileRenameApp = () => {
     e.preventDefault();
     setDragOver(false);
     const droppedFiles = Array.from(e.dataTransfer.files);
+    addDebugLog('info', `ドロップされたファイル数: ${droppedFiles.length}`);
     handleFiles(droppedFiles);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = e.target.files ? Array.from(e.target.files) : [];
+    addDebugLog('info', `選択されたファイル数: ${selectedFiles.length}`);
     handleFiles(selectedFiles);
   };
 
   const handleFiles = (selectedFiles: File[]) => {
     const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
-    const validFiles = selectedFiles.filter(file => 
-      allowedTypes.includes(file.type) && file.size <= 15 * 1024 * 1024
-    );
+    
+    addDebugLog('info', 'ファイル検証開始', {
+      totalFiles: selectedFiles.length,
+      allowedTypes
+    });
+
+    const validFiles = selectedFiles.filter(file => {
+      const isValidType = allowedTypes.includes(file.type);
+      const isValidSize = file.size <= 15 * 1024 * 1024;
+      
+      if (!isValidType) {
+        addDebugLog('warning', `無効なファイル形式: ${file.name} (${file.type})`);
+      }
+      if (!isValidSize) {
+        addDebugLog('warning', `ファイルサイズ過大: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB)`);
+      }
+      
+      return isValidType && isValidSize;
+    });
+
+    addDebugLog('info', `有効なファイル: ${validFiles.length}/${selectedFiles.length}`);
 
     const newFiles: ProcessedFile[] = validFiles.map((file, index) => ({
       id: `${Date.now()}-${index}`,
@@ -95,23 +141,46 @@ const FileRenameApp = () => {
 
   const removeFile = (id: string) => {
     setFiles(prev => prev.filter(f => f.id !== id));
+    addDebugLog('info', `ファイル削除: ${id}`);
   };
 
   const clearAllFiles = () => {
     setFiles([]);
+    addDebugLog('info', 'すべてのファイルをクリア');
   };
 
-  // Dify API処理 - エラーハンドリング強化版
+  // Dify API処理 - デバッグ強化版
   const processFileWithDify = async (file: File): Promise<DifyApiResponse> => {
+    addDebugLog('info', `API処理開始: ${file.name}`, {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      userId: config.userId
+    });
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('userId', config.userId);
 
+    // FormDataの内容をデバッグ
+    const formDataEntries: Record<string, unknown> = {};
+    for (const [key, value] of formData.entries()) {
+      if (value instanceof File) {
+        formDataEntries[key] = {
+          name: value.name,
+          size: value.size,
+          type: value.type
+        };
+      } else {
+        formDataEntries[key] = value;
+      }
+    }
+    addDebugLog('info', 'FormData内容', formDataEntries);
+
     try {
-      console.log('Sending file to API:', {
-        fileName: file.name,
-        fileSize: file.size,
-        fileType: file.type
+      addDebugLog('info', 'fetch開始', {
+        url: '/api/dify-process',
+        method: 'POST'
       });
 
       const response = await fetch('/api/dify-process', {
@@ -119,53 +188,91 @@ const FileRenameApp = () => {
         body: formData
       });
 
-      console.log('API Response status:', response.status);
-      console.log('API Response headers:', Object.fromEntries(response.headers.entries()));
+      addDebugLog('info', 'レスポンス受信', {
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries())
+      });
+
+      // 415エラーの特別処理
+      if (response.status === 415) {
+        addDebugLog('error', '415 Unsupported Media Type エラー', {
+          message: 'サーバーがリクエストのメディアタイプを処理できません',
+          contentType: response.headers.get('content-type'),
+          possibleCauses: [
+            'API Routeでファイルアップロードが正しく設定されていない',
+            'Content-Typeヘッダーの問題',
+            'FormDataの形式が正しくない'
+          ]
+        });
+      }
 
       // レスポンステキストを直接取得
       const responseText = await response.text();
-      console.log('Raw response text:', responseText);
+      addDebugLog('info', 'レスポンステキスト取得', {
+        length: responseText.length,
+        preview: responseText.substring(0, 200) + (responseText.length > 200 ? '...' : '')
+      });
 
       // 空のレスポンスチェック
       if (!responseText) {
-        throw new Error('空のレスポンスが返されました');
+        const error = '空のレスポンスが返されました';
+        addDebugLog('error', error);
+        throw new Error(error);
       }
 
       // HTMLエラーページのチェック
       if (responseText.includes('<html>') || responseText.includes('<!DOCTYPE')) {
-        throw new Error(`サーバーエラー: HTML応答が返されました (Status: ${response.status})`);
+        const error = `サーバーエラー: HTML応答が返されました (Status: ${response.status})`;
+        addDebugLog('error', error, { responsePreview: responseText.substring(0, 500) });
+        throw new Error(error);
       }
 
       // JSONパース試行
       let jsonData;
       try {
         jsonData = JSON.parse(responseText);
+        addDebugLog('info', 'JSON解析成功', jsonData);
       } catch (parseError) {
-        console.error('JSON Parse error:', parseError);
+        addDebugLog('error', 'JSON解析エラー', {
+          error: parseError,
+          responseText: responseText.substring(0, 500)
+        });
         throw new Error(`JSON解析エラー: ${responseText.substring(0, 100)}...`);
       }
-
-      console.log('Parsed JSON:', jsonData);
 
       // エラーレスポンスの場合
       if (!response.ok) {
         const errorMessage = jsonData.error || `HTTP error! status: ${response.status}`;
+        addDebugLog('error', 'APIエラーレスポンス', {
+          status: response.status,
+          error: errorMessage,
+          fullResponse: jsonData
+        });
         throw new Error(errorMessage);
       }
 
       // 成功レスポンスの検証
       if (!jsonData.success) {
-        throw new Error(jsonData.error || 'API処理が失敗しました');
+        const error = jsonData.error || 'API処理が失敗しました';
+        addDebugLog('error', 'API処理失敗', jsonData);
+        throw new Error(error);
       }
 
+      addDebugLog('info', 'API処理成功', jsonData);
       return jsonData as DifyApiResponse;
 
     } catch (error) {
-      console.error('processFileWithDify error:', error);
+      addDebugLog('error', 'processFileWithDify例外', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined
+      });
       
       // ネットワークエラー
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        throw new Error('ネットワークエラー: サーバーに接続できません');
+        const networkError = 'ネットワークエラー: サーバーに接続できません';
+        addDebugLog('error', networkError);
+        throw new Error(networkError);
       }
       
       // その他のエラー
@@ -177,6 +284,7 @@ const FileRenameApp = () => {
   const startProcessing = async () => {
     if (files.length === 0) return;
 
+    addDebugLog('info', '一括処理開始', { fileCount: files.length });
     setIsProcessing(true);
 
     for (const fileObj of files) {
@@ -205,7 +313,11 @@ const FileRenameApp = () => {
             : f
         ));
 
+        addDebugLog('info', `ファイル処理完了: ${fileObj.name}`, result);
+
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        
         // エラー時の更新
         setFiles(prev => prev.map(f => 
           f.id === fileObj.id 
@@ -213,10 +325,12 @@ const FileRenameApp = () => {
                 ...f, 
                 status: 'error', 
                 progress: 0, 
-                error: error instanceof Error ? error.message : 'Unknown error' 
+                error: errorMessage
               }
             : f
         ));
+
+        addDebugLog('error', `ファイル処理失敗: ${fileObj.name}`, { error: errorMessage });
       }
 
       // 短い間隔を空ける
@@ -224,6 +338,7 @@ const FileRenameApp = () => {
     }
 
     setIsProcessing(false);
+    addDebugLog('info', '一括処理完了');
   };
 
   // 単一ファイルダウンロード
@@ -238,11 +353,15 @@ const FileRenameApp = () => {
     a.click();
     URL.revokeObjectURL(url);
     document.body.removeChild(a);
+    
+    addDebugLog('info', `ファイルダウンロード: ${fileObj.result.renamed_filename}`);
   };
 
   // 全ファイル一括ダウンロード
   const downloadAllFiles = () => {
     const completedFiles = files.filter(f => f.status === 'completed');
+    
+    addDebugLog('info', `一括ダウンロード開始: ${completedFiles.length}ファイル`);
     
     completedFiles.forEach((fileObj, index) => {
       setTimeout(() => {
@@ -284,6 +403,82 @@ const FileRenameApp = () => {
           <p className="text-lg text-gray-600">
             複数の領収書ファイルを一度にアップロードして、自動でリネーム・ダウンロードします
           </p>
+        </div>
+
+        {/* デバッグパネル */}
+        <div className="bg-gray-900 text-white rounded-xl shadow-lg p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Bug className="w-5 h-5 text-green-400" />
+              <h2 className="text-xl font-semibold text-green-400">🐛 デバッグ情報</h2>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={clearDebugLogs}
+                className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
+              >
+                ログクリア
+              </button>
+              <button
+                onClick={() => setShowDebug(!showDebug)}
+                className="px-3 py-1 bg-gray-600 hover:bg-gray-700 text-white text-sm rounded transition-colors"
+              >
+                {showDebug ? '隠す' : '表示'}
+              </button>
+            </div>
+          </div>
+          
+          {showDebug && (
+            <div className="space-y-4">
+              {/* 現在の状態 */}
+              <div className="bg-gray-800 rounded-lg p-4">
+                <h3 className="text-green-400 font-semibold mb-2 flex items-center gap-2">
+                  <Terminal className="w-4 h-4" />
+                  現在の状態
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                  <div>Files: <span className="text-blue-400">{files.length}</span></div>
+                  <div>Processing: <span className="text-yellow-400">{isProcessing ? 'Yes' : 'No'}</span></div>
+                  <div>Errors: <span className="text-red-400">{stats.errors}</span></div>
+                  <div>Completed: <span className="text-green-400">{stats.completed}</span></div>
+                </div>
+              </div>
+
+              {/* ログ表示 */}
+              <div className="bg-gray-800 rounded-lg p-4 max-h-60 overflow-y-auto">
+                <h3 className="text-green-400 font-semibold mb-2">ログ ({debugLogs.length})</h3>
+                {debugLogs.length === 0 ? (
+                  <div className="text-gray-400 text-sm">ログはありません</div>
+                ) : (
+                  <div className="space-y-1 text-xs font-mono">
+                    {debugLogs.map((log, index) => (
+                      <div key={index} className={`
+                        ${log.level === 'error' ? 'text-red-400' : 
+                          log.level === 'warning' ? 'text-yellow-400' : 'text-gray-300'}
+                      `}>
+                        <span className="text-gray-500">[{log.timestamp}]</span>
+                        <span className={`ml-2 ${
+                          log.level === 'error' ? 'text-red-400' : 
+                          log.level === 'warning' ? 'text-yellow-400' : 'text-green-400'
+                        }`}>
+                          {log.level.toUpperCase()}
+                        </span>
+                        <span className="ml-2">{log.message}</span>
+                        {log.data && (
+                          <details className="ml-4 mt-1">
+                            <summary className="cursor-pointer text-blue-400">詳細</summary>
+                            <pre className="mt-1 text-gray-400 bg-gray-900 p-2 rounded text-xs overflow-x-auto">
+                              {JSON.stringify(log.data, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* API設定セクション */}
@@ -477,16 +672,6 @@ const FileRenameApp = () => {
                 </div>
               ))}
             </div>
-          </div>
-        )}
-
-        {/* デバッグ情報表示エリア */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className="bg-gray-900 text-green-400 rounded-xl p-4 mt-6 font-mono text-sm">
-            <div className="mb-2 font-bold">🐛 デバッグ情報</div>
-            <div>Files: {files.length}</div>
-            <div>Processing: {isProcessing ? 'Yes' : 'No'}</div>
-            <div>Config: {JSON.stringify(config, null, 2)}</div>
           </div>
         )}
 
