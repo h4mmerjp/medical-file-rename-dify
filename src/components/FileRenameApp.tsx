@@ -101,23 +101,76 @@ const FileRenameApp = () => {
     setFiles([]);
   };
 
-  // Dify API処理 - 型を明確に指定
+  // Dify API処理 - エラーハンドリング強化版
   const processFileWithDify = async (file: File): Promise<DifyApiResponse> => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('userId', config.userId);
 
-    const response = await fetch('/api/dify-process', {
-      method: 'POST',
-      body: formData
-    });
+    try {
+      console.log('Sending file to API:', {
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      const response = await fetch('/api/dify-process', {
+        method: 'POST',
+        body: formData
+      });
+
+      console.log('API Response status:', response.status);
+      console.log('API Response headers:', Object.fromEntries(response.headers.entries()));
+
+      // レスポンステキストを直接取得
+      const responseText = await response.text();
+      console.log('Raw response text:', responseText);
+
+      // 空のレスポンスチェック
+      if (!responseText) {
+        throw new Error('空のレスポンスが返されました');
+      }
+
+      // HTMLエラーページのチェック
+      if (responseText.includes('<html>') || responseText.includes('<!DOCTYPE')) {
+        throw new Error(`サーバーエラー: HTML応答が返されました (Status: ${response.status})`);
+      }
+
+      // JSONパース試行
+      let jsonData;
+      try {
+        jsonData = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('JSON Parse error:', parseError);
+        throw new Error(`JSON解析エラー: ${responseText.substring(0, 100)}...`);
+      }
+
+      console.log('Parsed JSON:', jsonData);
+
+      // エラーレスポンスの場合
+      if (!response.ok) {
+        const errorMessage = jsonData.error || `HTTP error! status: ${response.status}`;
+        throw new Error(errorMessage);
+      }
+
+      // 成功レスポンスの検証
+      if (!jsonData.success) {
+        throw new Error(jsonData.error || 'API処理が失敗しました');
+      }
+
+      return jsonData as DifyApiResponse;
+
+    } catch (error) {
+      console.error('processFileWithDify error:', error);
+      
+      // ネットワークエラー
+      if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+        throw new Error('ネットワークエラー: サーバーに接続できません');
+      }
+      
+      // その他のエラー
+      throw error;
     }
-
-    return await response.json() as DifyApiResponse;
   };
 
   // 一括処理開始
@@ -424,6 +477,16 @@ const FileRenameApp = () => {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* デバッグ情報表示エリア */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="bg-gray-900 text-green-400 rounded-xl p-4 mt-6 font-mono text-sm">
+            <div className="mb-2 font-bold">🐛 デバッグ情報</div>
+            <div>Files: {files.length}</div>
+            <div>Processing: {isProcessing ? 'Yes' : 'No'}</div>
+            <div>Config: {JSON.stringify(config, null, 2)}</div>
           </div>
         )}
 
